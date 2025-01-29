@@ -1,0 +1,715 @@
+<p1>head>
+import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+import { PointerLockControls } from 'https://cdn.skypack.dev/three@0.132.2/examples/jsm/controls/PointerLockControls.js';
+
+class MinecraftGame {
+  constructor() {
+    window.addEventListener('start-game', () => this.initGame());
+    this.blocks = []; // Array to track all blocks for collision
+  }
+
+  initGame() {
+    this.scene = new THREE.Scene();
+    this.scene.background = new THREE.Color(0x87CEEB);  
+    this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.renderer = new THREE.WebGLRenderer();
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('game-container').appendChild(this.renderer.domElement);
+
+    this.controls = new PointerLockControls(this.camera, document.body);
+    this.scene.add(this.controls.getObject());
+
+    // Improved error handling for pointer lock
+    this.controls.addEventListener('lock', () => {
+      console.log('Pointer locked');
+    });
+
+    this.controls.addEventListener('unlock', () => {
+      console.log('Pointer unlocked');
+      // Optional: Reset game state or show menu
+    });
+
+    // Movement variables
+    this.moveForward = false;
+    this.moveBackward = false;
+    this.moveLeft = false;
+    this.moveRight = false;
+    this.canJump = false;
+
+    // Movement speed and physics
+    this.velocity = new THREE.Vector3();
+    this.direction = new THREE.Vector3();
+    this.gravity = -9.8;
+
+    // Inventory system
+    this.inventory = [
+      { type: 'grass', texture: 'https://files.catbox.moe/ujfhnd.PNG', count: 10 },
+      null, null, null, null, null, null, null, null
+    ];
+    this.selectedSlot = 0;
+
+    // Block interaction setup
+    this.raycaster = new THREE.Raycaster();
+    this.blocks = [];
+    this.createSuperFlatWorld();
+
+    this.setupControls();
+    this.setupKeyboardControls();
+    this.setupInventoryControls();
+    this.renderInventory();
+    this.setupBlockInteraction();
+    this.setupCollisionDetection();
+    this.animate();
+  }
+
+  setupControls() {
+    const gameContainer = document.getElementById('game-container');
+    
+    gameContainer.addEventListener('click', () => {
+      try {
+        this.controls.lock();
+      } catch (error) {
+        console.error('Failed to lock pointer:', error);
+      }
+    });
+
+    // Add escape key to unlock
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        this.controls.unlock();
+      }
+    });
+  }
+
+  setupKeyboardControls() {
+    const onKeyDown = (event) => {
+      switch (event.code) {
+        case 'KeyW':
+          this.moveForward = true;
+          break;
+        case 'KeyA':
+          this.moveLeft = true;
+          break;
+        case 'KeyS':
+          this.moveBackward = true;
+          break;
+        case 'KeyD':
+          this.moveRight = true;
+          break;
+        case 'Space':
+          if (this.canJump) {
+            this.velocity.y += 5; 
+            this.canJump = false;
+          }
+          break;
+      }
+    };
+
+    const onKeyUp = (event) => {
+      switch (event.code) {
+        case 'KeyW':
+          this.moveForward = false;
+          break;
+        case 'KeyA':
+          this.moveLeft = false;
+          break;
+        case 'KeyS':
+          this.moveBackward = false;
+          break;
+        case 'KeyD':
+          this.moveRight = false;
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+  }
+
+  setupInventoryControls() {
+    const inventorySlots = document.querySelectorAll('.inventory-slot');
+    
+    inventorySlots.forEach((slot, index) => {
+      slot.addEventListener('click', () => {
+        this.selectInventorySlot(index);
+      });
+    });
+
+    // Number key selection
+    document.addEventListener('keydown', (event) => {
+      if (event.key >= '1' && event.key <= '9') {
+        const slotIndex = parseInt(event.key) - 1;
+        this.selectInventorySlot(slotIndex);
+      }
+    });
+  }
+
+  selectInventorySlot(index) {
+    const inventorySlots = document.querySelectorAll('.inventory-slot');
+    
+    // Remove selected class from all slots
+    inventorySlots.forEach(slot => {
+      slot.classList.remove('selected');
+    });
+
+    // Add selected class to clicked slot
+    inventorySlots[index].classList.add('selected');
+    this.selectedSlot = index;
+  }
+
+  renderInventory() {
+    const inventorySlots = document.querySelectorAll('.inventory-slot');
+    
+    this.inventory.forEach((item, index) => {
+      const slot = inventorySlots[index];
+      
+      // Clear previous content
+      slot.innerHTML = '';
+      
+      if (item) {
+        const img = document.createElement('img');
+        img.src = item.texture;
+        slot.appendChild(img);
+        
+        // Add count text
+        const countSpan = document.createElement('span');
+        countSpan.textContent = item.count;
+        slot.appendChild(countSpan);
+      }
+    });
+
+    // Select first slot by default
+    this.selectInventorySlot(0);
+  }
+
+  createSuperFlatWorld() {
+    const textureLoader = new THREE.TextureLoader();
+    const texture = textureLoader.load('https://files.catbox.moe/ujfhnd.PNG');
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    
+    // Create blocks and add them to tracking array
+    for (let x = -100; x < 100; x++) {
+      for (let z = -100; z < 100; z++) {
+        const material = new THREE.MeshStandardMaterial({ map: texture });
+        const cube = new THREE.Mesh(geometry, material);
+        cube.position.set(x, 0, z);
+        this.scene.add(cube);
+        
+        // Add to blocks array for collision detection
+        this.blocks.push(cube);
+      }
+    }
+
+    // Add ambient light to see the terrain better
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    this.scene.add(ambientLight);
+
+    // Add directional light for more depth
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    directionalLight.position.set(1, 1, 1);
+    this.scene.add(directionalLight);
+
+    // Position camera slightly above the ground
+    this.camera.position.y = 2;
+    this.camera.position.z = 0;
+  }
+
+  setupBlockInteraction() {
+    // Block placement and destruction
+    document.addEventListener('mousedown', (event) => {
+      // Only handle interactions when pointer is locked
+      if (!this.controls.isLocked) return;
+
+      // Left click (0) to destroy block, right click (2) to place block
+      if (event.button === 0 || event.button === 2) {
+        this.interactWithBlock(event.button);
+      }
+    });
+  }
+
+  interactWithBlock(mouseButton) {
+    // Calculate intersection with blocks
+    const camera = this.camera;
+    this.raycaster.setFromCamera(new THREE.Vector2(), camera);
+
+    const intersects = this.raycaster.intersectObjects(this.blocks);
+
+    if (intersects.length > 0) {
+      const intersectedObject = intersects[0].object;
+      const point = intersects[0].point;
+      const normal = intersects[0].face.normal;
+
+      // Determine block placement/destruction position
+      const blockPosition = new THREE.Vector3(
+        Math.round(point.x + normal.x * 0.5),
+        Math.round(point.y + normal.y * 0.5),
+        Math.round(point.z + normal.z * 0.5)
+      );
+
+      if (mouseButton === 0) {
+        // Destroy block (left click)
+        this.destroyBlock(intersectedObject);
+      } else if (mouseButton === 2) {
+        // Place block (right click)
+        this.placeBlock(blockPosition);
+      }
+    }
+  }
+
+  destroyBlock(block) {
+    // Prevent destroying ground level blocks
+    if (block.position.y === 0) return;
+
+    // Remove block from scene and blocks array
+    this.scene.remove(block);
+    this.blocks = this.blocks.filter(b => b !== block);
+    block.geometry.dispose();
+    block.material.dispose();
+  }
+
+  placeBlock(position) {
+    // Check if current selected inventory slot has a block
+    const selectedItem = this.inventory[this.selectedSlot];
+    if (!selectedItem || selectedItem.count <= 0) return;
+
+    // Check if placement would intersect with player
+    const testBlock = new THREE.Box3().setFromCenterAndSize(
+      position, 
+      new THREE.Vector3(1, 1, 1)
+    );
+    const playerBox = new THREE.Box3().setFromCenterAndSize(
+      this.controls.getObject().position, 
+      new THREE.Vector3(0.6, 1.8, 0.6)
+    );
+
+    // Prevent block placement inside player
+    if (testBlock.intersectsBox(playerBox)) {
+      return;
+    }
+
+    // Create and place new block
+    const textureLoader = new THREE.TextureLoader();
+    const texture = textureLoader.load(selectedItem.texture);
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({ map: texture });
+    const cube = new THREE.Mesh(geometry, material);
+    
+    cube.position.copy(position);
+    this.scene.add(cube);
+    this.blocks.push(cube);
+
+    // Reduce inventory count
+    selectedItem.count--;
+    this.renderInventory();
+  }
+
+  setupCollisionDetection() {
+    // Collision detection box for the player
+    this.playerBox = new THREE.Box3();
+    this.blockBox = new THREE.Box3();
+  }
+
+  checkCollision(position) {
+    // Create bounding box for player's current position
+    this.playerBox.setFromCenterAndSize(
+      position, 
+      new THREE.Vector3(0.6, 1.8, 0.6)  // Slightly smaller than a block
+    );
+
+    // Check collision with each block
+    for (let block of this.blocks) {
+      // Create bounding box for the block
+      this.blockBox.setFromObject(block);
+
+      // Check for intersection
+      if (this.playerBox.intersectsBox(this.blockBox)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  animate() {
+    requestAnimationFrame(() => this.animate());
+
+    // Movement logic
+    if (this.controls.isLocked) {
+      const delta = 0.1; 
+      const moveSpeed = 0.1; 
+
+      // Slightly reduce horizontal velocity to prevent excessive sliding
+      this.velocity.x *= 0.7;
+      this.velocity.z *= 0.7;
+
+      // Apply gravity
+      this.velocity.y += this.gravity * delta;
+
+      // Predict next position
+      const currentPosition = this.controls.getObject().position.clone();
+      const moveDirection = new THREE.Vector3();
+
+      // Movement directions with collision prevention
+      if (this.moveForward) {
+        moveDirection.z -= moveSpeed;
+      }
+      if (this.moveBackward) {
+        moveDirection.z += moveSpeed;
+      }
+      if (this.moveLeft) {
+        moveDirection.x -= moveSpeed;
+      }
+      if (this.moveRight) {
+        moveDirection.x += moveSpeed;
+      }
+
+      // Apply movement if no collision
+      const newPosition = currentPosition.clone().add(
+        moveDirection.applyQuaternion(this.controls.getObject().quaternion)
+      );
+
+      // Check if new position would cause a collision
+      if (!this.checkCollision(newPosition)) {
+        this.controls.moveRight(moveDirection.x);
+        this.controls.moveForward(moveDirection.z);
+      }
+
+      // Ground collision and gravity
+      if (this.controls.getObject().position.y < 2) {
+        this.velocity.y = 0;
+        this.controls.getObject().position.y = 2;
+        this.canJump = true;
+      }
+    }
+
+    this.renderer.render(this.scene, this.camera);
+  }
+}
+
+new MinecraftGame();document.addEventListener('DOMContentLoaded', () => {
+  const mainMenu = document.getElementById('main-menu');
+  const gameContainer = document.getElementById('game-container');
+  const singleplayerBtn = document.getElementById('singleplayer-btn');
+  const multiplayerBtn = document.getElementById('multiplayer-btn');
+  const multiplayerModal = document.getElementById('multiplayer-modal');
+  const closeModalBtn = document.querySelector('.close-modal');
+  const connectServerBtn = document.getElementById('connect-server-btn');
+  const serverAddressInput = document.getElementById('server-address');
+  const serverStatus = document.getElementById('server-status');
+
+  singleplayerBtn.addEventListener('click', () => {
+    mainMenu.style.display = 'none';
+    gameContainer.style.display = 'block';
+    
+    // Trigger game initialization
+    window.dispatchEvent(new Event('start-game'));
+  });
+
+  multiplayerBtn.addEventListener('click', () => {
+    multiplayerModal.style.display = 'block';
+  });
+
+  closeModalBtn.addEventListener('click', () => {
+    multiplayerModal.style.display = 'none';
+  });
+
+  connectServerBtn.addEventListener('click', () => {
+    const serverAddress = serverAddressInput.value.trim();
+    
+    if (!serverAddress) {
+      serverStatus.textContent = 'Please enter a server address';
+      serverStatus.style.color = 'red';
+      return;
+    }
+
+    // Simulate server connection (replace with actual WebSocket connection)
+    try {
+      // Validate server address format
+      const urlPattern = /^(localhost|[\w.-]+)(?::\d+)?$/;
+      if (!urlPattern.test(serverAddress)) {
+        throw new Error('Invalid server address format');
+      }
+
+      // Here you would typically establish a WebSocket connection
+      serverStatus.textContent = `Connecting to ${serverAddress}...`;
+      serverStatus.style.color = 'yellow';
+
+      // Simulated connection (replace with actual connection logic)
+      setTimeout(() => {
+        serverStatus.textContent = `Connected to ${serverAddress}`;
+        serverStatus.style.color = 'green';
+
+        // Optional: Hide modal and start multiplayer game
+        multiplayerModal.style.display = 'none';
+        mainMenu.style.display = 'none';
+        gameContainer.style.display = 'block';
+
+        // Trigger multiplayer game initialization (you'll need to implement this)
+        window.dispatchEvent(new Event('start-multiplayer-game'));
+      }, 1500);
+
+    } catch (error) {
+      serverStatus.textContent = error.message;
+      serverStatus.style.color = 'red';
+    }
+  });
+
+  // Optional: Add hover sound effect (commented out as no audio was provided)
+  const menuButtons = document.querySelectorAll('.menu-button');
+  
+  menuButtons.forEach(button => {
+    button.addEventListener('mouseenter', () => {
+      // Optionally add hover effect
+      button.style.transform = 'scale(1.05)';
+    });
+
+    button.addEventListener('mouseleave', () => {
+      button.style.transform = 'scale(1)';
+    });
+  });
+});{
+  "name": "minecraft-webgl",
+  "version": "1.0.0",
+  "description": "Minecraft-like WebGL game - Super Flat World",
+  "type": "module"
+}@import url('https://fonts.googleapis.com/css2?family=Minecraft&display=swap');
+
+body, html {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: 'Minecraft', monospace;
+  overflow: hidden;
+}
+
+#main-menu {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(45deg, #101010, #202030);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+#main-menu::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0,0,0,0.15) 0px,
+    rgba(0,0,0,0.15) 1px,
+    transparent 1px,
+    transparent 2px
+  );
+  pointer-events: none;
+}
+
+.menu-container {
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #808080;
+  padding: 20px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.5);
+}
+
+.logo {
+  margin-bottom: 40px;
+}
+
+.logo img {
+  max-width: 100%;
+  height: auto;
+}
+
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 40px;
+}
+
+.menu-button {
+  font-family: 'Minecraft', monospace;
+  background-color: rgba(0, 0, 0, 0.4);
+  border: 2px solid #808080;
+  color: #E0E0E0;
+  padding: 15px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-shadow: 1px 1px #3f3f3f;
+  text-transform: uppercase;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.menu-button:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-color: #FFFFFF;
+}
+
+.menu-button:active {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+.horizontal-buttons {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.horizontal-buttons .menu-button {
+  flex: 1;
+}
+
+.menu-footer {
+  display: flex;
+  justify-content: space-between;
+  color: #808080;
+  font-size: 12px;
+  text-shadow: 1px 1px #000;
+}
+
+.menu-footer .footer-left,
+.menu-footer .footer-right {
+  flex: 1;
+}
+
+.menu-footer .footer-right {
+  text-align: right;
+}
+
+#crosshair {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  border: 2px solid white;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 100;
+}
+
+#game-container {
+  width: 100vw;
+  height: 100vh;
+}
+
+#inventory {
+  position: fixed;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  background-color: rgba(0, 0, 0, 0.4);
+  padding: 5px;
+  border-radius: 5px;
+}
+
+.inventory-slot {
+  width: 40px;
+  height: 40px;
+  background-color: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 0.3s;
+  position: relative;
+}
+
+.inventory-slot:hover {
+  background-color: rgba(255, 255, 255, 0.4);
+}
+
+.inventory-slot.selected {
+  border-color: #FFD700;
+  box-shadow: 0 0 5px rgba(255, 215, 0, 0.7);
+}
+
+.inventory-slot img {
+  max-width: 80%;
+  max-height: 80%;
+  object-fit: contain;
+}
+
+.inventory-slot span {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  color: white;
+  background-color: rgba(0,0,0,0.5);
+  font-size: 10px;
+  padding: 1px;
+}
+
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 2000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: rgba(0,0,0,0.7);
+}
+
+.modal-content {
+  background-color: rgba(0, 0, 0, 0.8);
+  margin: 15% auto;
+  padding: 20px;
+  border: 2px solid #808080;
+  width: 80%;
+  max-width: 500px;
+  text-align: center;
+  color: #E0E0E0;
+  font-family: 'Minecraft', monospace;
+}
+
+.close-modal {
+  color: #aaa;
+  float: right;
+  font-size: 28px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.close-modal:hover {
+  color: white;
+}
+
+.server-connection {
+  display: flex;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.server-connection input {
+  flex-grow: 1;
+  padding: 10px;
+  background-color: rgba(0, 0, 0, 0.4);
+  border: 2px solid #808080;
+  color: #E0E0E0;
+  font-family: 'Minecraft', monospace;
+}
+
+#server-status {
+  margin-top: 10px;
+  color: #E0E0E0;
+}</p1>
